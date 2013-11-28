@@ -315,6 +315,81 @@ class TagTimeLog:
         plt.xlabel('Day of the Week')
         plt.ylabel('Time Spent (h)')
 
+    def weekday_similarity(self, tags, top_n=None):
+        if top_n is not None:
+            tags = self.top_n_tags(top_n, tags)
+        if tags is None:
+            tags = self.top_n_tags(1000)
+        D = self.D.resample('D', how='sum', label='left').fillna(0)
+        D = D / D.sum(axis=1)  # all records within a day must sum to 1
+        D = D.groupby(D.index.weekday, sort=True).mean()  # take average over weeks
+        keys = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+        from sklearn.manifold import MDS
+        mds = MDS()
+        X = mds.fit_transform(D)
+        plt.scatter(X[:, 0], X[:, 1], s=100)
+        plt.plot(X[:, 0], X[:, 1])
+        for label, x, y in zip(keys, X[:, 0], X[:, 1]):
+            plt.annotate(label, xy=(x, y), xytext = (-20, 20),
+                         textcoords='offset points', ha='right', va='bottom')
+
+    def day_similarity(self, tags, top_n=None, resample='D'):
+        if top_n is not None:
+            tags = self.top_n_tags(top_n, tags)
+        if tags is None:
+            tags = self.top_n_tags(1000)
+        D = self.D.resample(resample, how='sum', label='left').fillna(0)
+        D = D / D.sum(axis=1)  # all records within a day must sum to 1
+
+        #wd = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        from sklearn.manifold import SpectralEmbedding as MDS
+        from sklearn.preprocessing import scale
+        mds = MDS(n_components=2)
+        X = mds.fit_transform(scale(D.values))
+        if 0:
+            import calendar
+            c = [calendar.timegm(x.utctimetuple()) for x in D.index]
+        else:
+            c = [x.weekday() for x in D.index]
+        X, Y = X[:, 0], X[:, 1]
+
+        fig = plt.figure()
+        plt.plot(X, Y)
+        plt.scatter(X, Y, c=c, s=100)
+
+        from sklearn.cluster import MeanShift
+        #cluster = MeanShift(bandwidth=5).fit(scale(D.values))
+        cluster = MeanShift(bandwidth=.3).fit(D.values)
+        print "Number of clusters found: ", len(cluster.cluster_centers_)
+        from sklearn.metrics.pairwise import pairwise_distances
+        dist = pairwise_distances(D, cluster.cluster_centers_).min(axis=1)
+        dist = dist.max() - dist + dist.mean() / 4
+        colors = self.cmap(np.linspace(0., 1., len(cluster.cluster_centers_)))
+        ccol = [colors[i] for i in cluster.labels_]
+
+        mds = MDS(n_components=3)
+        X = mds.fit_transform(scale(D.values))
+        X -= X.min(axis=0)
+        X /= X.max(axis=0)
+        from colormath.color_objects import HSVColor
+        ccol = [np.array(HSVColor(40 + x[0] * 320, x[1], x[2])
+                         .convert_to('rgb')
+                         .get_value_tuple()) / 255.
+                for x in X]
+
+        vals = D['phd'] + D['proposal'] + D['conference']
+        vals *= 24
+
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+        #ax.bar(D.index, (D.index.weekday == 5) + (D.index.weekday == 6) + 4, width=0.8, color=ccol)
+        ax.bar(D.index, vals + 0.1, width=0.8, color=ccol)
+        plt.setp(ax.get_xticklabels(), fontsize=10, rotation='vertical')
+        #for label, x, y in zip(D.index, X, Y):
+        #    plt.annotate(str(dt2d(label)) + " " + wd[label.weekday()], xy=(x, y), xytext = (-20, 20),
+        #                 textcoords='offset points', ha='right', va='bottom')
+
     def top_n_tags(self, n, extra_tags=[]):
         # sum up tags within a day, determine the sum over the days
         D = self.D.sum()
@@ -464,6 +539,10 @@ def main():
         ttl.trend(args.tags, args.top_n, args.other, args.trend_interval, ewmaspan=args.trend_ewma)
     if(args.cumulative_trends):
         ttl.trend(args.tags, args.top_n, args.other, args.trend_interval, cumulative=True, ewmaspan=args.trend_ewma)
+    if(args.weekday_similarity):
+        ttl.weekday_similarity(args.tags, args.top_n)
+    if(args.day_similarity):
+        ttl.day_similarity(args.tags, args.top_n)
 
     if args.out is not None:
         plt.savefig(args.out)
