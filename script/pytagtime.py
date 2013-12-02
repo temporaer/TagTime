@@ -30,6 +30,11 @@ def reldate(s):
         raise RuntimeError("Unknown relative date format: %s" % s)
     return datetime.datetime(d.year, d.month, d.day)
 
+def absspec(v):
+    if v > -1 and v < 1:
+        return "%d min" % int(v * 60)
+    else:
+        return "%1.1f h" % v
 
 def dt2d(dt):
     return datetime.date(dt.year, dt.month, dt.day)
@@ -184,6 +189,98 @@ class TagTimeLog:
         else:
             plt.ylabel('Time Spent (h) per Interval (%s)' % resample)
         plt.xlabel('Interval ID')
+
+    def trend_ratio(self, tags, resample='D', ewmaspan=None):
+        """ show the supplied tags summed up per day """
+        if ewmaspan is None:
+            ewmaspan = 19
+        assert len(tags) == 2 or len(tags) == 1
+        D = self.D[tags]
+        if len(tags) == 1:
+            tags = [tags[0]] * 2
+        if 'other' in tags:
+            D['other'] = self.D[[t for t in self.D.keys()
+                                 if t not in tags]].sum(axis=1)
+        Dresampled = D.resample(resample, how='sum', label='left')
+
+        D = Dresampled.fillna(0)
+        ratio_name = '%s/%s' % (tags[0], tags[1])
+        if ewmaspan is not None:
+            ewma = pd.ewma(D, span=ewmaspan)
+            ratio = ewma[tags[0]] / ewma[tags[1]]
+            ratio = ratio.replace([np.inf, -np.inf], np.nan)
+            ewma[ratio_name] = ratio
+            D[ratio_name] = ratio
+            ewma = ewma.fillna(0)
+            #ewma = ewma.cumsum()
+            print ewma[ratio_name]
+
+            ewmstd = pd.ewmstd(D, span=2 * ewmaspan)
+
+        self._obfuscate(D)
+
+        alpha = 1
+        fig = plt.figure(figsize=(6, 10))
+        ax = fig.add_subplot(311)
+
+        if ewmaspan is not None:
+            colors = self.cmap(np.linspace(0., 1., len(D.keys())))
+            ewma[ratio_name].plot(style='--', legend=False, ax=ax,
+                      colormap=self.cmapname, linewidth=2)
+            for idx, k in enumerate([ratio_name]):
+                ax.fill_between(D.index, np.array(ewma[k] + ewmstd[k]).ravel(),
+                                np.array(ewma[k] - ewmstd[k]).ravel(),
+                                facecolor=colors[idx], alpha=0.2,
+                                linewidth=0)
+        #from IPython import embed; embed()
+        ax.legend(ax.lines[:len(D.keys())],
+                    map(lambda x:x.get_label(), ax.lines[:len(D.keys())]), loc='best')
+        ax.grid(True)
+        #ax.set_ylim(0, ewma.max().max())
+        ax.set_ylabel('%s (-)' % ratio_name)
+        ax.set_xlabel('Interval ID')
+
+        D = Dresampled.resample('1D', how='sum', label='left').fillna(0)
+
+        ax = fig.add_subplot(312)
+        Dc = pd.rolling_corr_pairwise(D, len(D.index)/10.)
+        Dc.ix[:, tags[0], tags[1]].plot(ax=ax)
+        ax.set_ylabel("correlation of %s and %s" % (tags[0], tags[1]))
+
+        if 'H' in resample:
+            shift_unit = '1H'; n = 24
+            base = 1.5
+            x = np.log(n) / np.log(base)  # 1 day
+            r = base ** (np.arange(0, x, np.log(1.05) / np.log(base)))
+            shift_interval = np.concatenate(([-n], -r[::-1], [0], r, [n]))
+        elif resample.find('D') >= 0:
+            shift_unit = '1D'
+            shift_interval = np.arange(-7, 8)
+        D = self.D.resample(shift_unit, how='sum', label='left').fillna(0)
+
+        L = []
+        offsets = []
+        for off in shift_interval:
+            #Ds = pd.DataFrame({tags[1]: self.D[tags[1]].shift(off, shift_unit).resample(shift_unit, how='sum', label='left').fillna(0)})
+            Ds = pd.DataFrame({tags[1]: self.D[tags[1]]})
+            Ds.index = Ds.index + pd.offsets.Hour(off)
+            Ds = Ds.resample(shift_unit, how='sum', label='left').fillna(0)
+            Ds[tags[0] + "-reference"] = D[tags[0]]
+            #if 'H' in resample:
+                #Ds = Ds.groupby([Ds.index.weekday, Ds.index.hour], sort=True).sum()
+            corr = Ds.corr().ix[tags[0] + "-reference", tags[1]]
+            L.append(corr)
+            offsets.append(off)
+
+        ax = fig.add_subplot(313)
+        ax.plot(offsets, L, '-')
+        ax.set_xticks(shift_interval[::4])
+        ax.xaxis.grid(True)
+        if 'H' in resample:
+            ax.set_xticklabels(map(absspec, shift_interval[::4]))
+        ax.set_ylabel('correlation of %s and %s' % (tags[0], tags[1]))
+        ax.set_xlabel('time shift of %s (%s)' % (tags[1], shift_unit))
+        ax.legend(loc='best')
 
     def hour_of_the_week(self, tags, top_n, resolution=2, other=False):
         """ show the supplied tags summed up per hour """
@@ -362,12 +459,6 @@ class TagTimeLog:
             n_hours = self.includehours[1] - self.includehours[0]
             print "total hours: %2.3f, should be around %d" % (values.sum(), n_hours)
 
-        def absspec(v):
-            if v < 1:
-                return "%d min" % int(v * 60)
-            else:
-                return "%1.1f h" % v
-
         # reformat labels to include absolute hours
         keys = ["%s (%s)" % (x, absspec(y)) for x, y in zip(keys, values)]
 
@@ -396,6 +487,7 @@ def main():
     parser.add_argument('--pie', action='store_true', help='display a pie chart for total time spent')
     parser.add_argument('--day-of-the-week', action='store_true', help='display a bar for each day of the week')
     parser.add_argument('--trends', action='store_true', help='show a line chart of time spent in trend-interval')
+    parser.add_argument('--ratio-trends', action='store_true', help='show a line chart of time spent in trend-interval as smoothed ratio of two tags')
     parser.add_argument('--cumulative-trends', action='store_true', help='show beeminder-like representation')
     parser.add_argument('--trend-interval', default='W', help='the interval to sum over for trend calculation (e.g. 2D, 7D, ...)')
     parser.add_argument('--trend-ewma', type=float, default=None, help='the exponential weighted moving average constant')
@@ -465,6 +557,8 @@ def main():
         ttl.trend(args.tags, args.top_n, args.other, args.trend_interval, ewmaspan=args.trend_ewma)
     if(args.cumulative_trends):
         ttl.trend(args.tags, args.top_n, args.other, args.trend_interval, cumulative=True, ewmaspan=args.trend_ewma)
+    if(args.ratio_trends):
+        ttl.trend_ratio(args.tags, resample=args.trend_interval, ewmaspan=args.trend_ewma)
 
     if args.out is not None:
         plt.savefig(args.out)
