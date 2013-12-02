@@ -32,9 +32,11 @@ def reldate(s):
 
 def absspec(v):
     if v > -1 and v < 1:
-        return "%d min" % int(v * 60)
+        return "%d'" % int(v * 60)
+    if v > -24 and v < 24:
+        return "%1.1fh" % v
     else:
-        return "%1.1f h" % v
+        return "%1.1fd" % (v / 24.)
 
 def dt2d(dt):
     return datetime.date(dt.year, dt.month, dt.day)
@@ -220,7 +222,7 @@ class TagTimeLog:
         self._obfuscate(D)
 
         alpha = 1
-        fig = plt.figure(figsize=(6, 10))
+        fig = plt.figure(figsize=(18, 14))
         ax = fig.add_subplot(311)
 
         if ewmaspan is not None:
@@ -248,38 +250,48 @@ class TagTimeLog:
         ax.set_ylabel("correlation of %s and %s" % (tags[0], tags[1]))
 
         if 'H' in resample:
-            shift_unit = '1H'; n = 24
-            base = 1.5
-            x = np.log(n) / np.log(base)  # 1 day
-            r = base ** (np.arange(0, x, np.log(1.05) / np.log(base)))
-            shift_interval = np.concatenate(([-n], -r[::-1], [0], r, [n]))
+            if True:
+                base = 2
+                shift_unit = '1H'; n = 24 * 1
+                shift_max = np.log(n) / np.log(base)
+                r = base ** np.arange(0, shift_max, np.log(1.03) / np.log(base))
+                shift_interval = np.concatenate(([-n], -r[::-1], [0], r, [n]))
+                def xtickvalues(v):
+                    return np.sign(v) * base **  \
+                            (np.abs(v) * shift_max / base ** shift_max)
+            else:
+                shift_unit = '1H'; n = 24 * 1
+                shift_interval = np.arange(-n, n + 1, 1)
+                def xtickvalues(v):
+                    return v
+
         elif resample.find('D') >= 0:
             shift_unit = '1D'
             shift_interval = np.arange(-7, 8)
         D = self.D.resample(shift_unit, how='sum', label='left').fillna(0)
 
         L = []
-        offsets = []
         for off in shift_interval:
-            #Ds = pd.DataFrame({tags[1]: self.D[tags[1]].shift(off, shift_unit).resample(shift_unit, how='sum', label='left').fillna(0)})
             Ds = pd.DataFrame({tags[1]: self.D[tags[1]]})
-            Ds.index = Ds.index + pd.offsets.Hour(off)
+            Ds.index = Ds.index + pd.offsets.Minute(off * 60)
             Ds = Ds.resample(shift_unit, how='sum', label='left').fillna(0)
             Ds[tags[0] + "-reference"] = D[tags[0]]
             #if 'H' in resample:
                 #Ds = Ds.groupby([Ds.index.weekday, Ds.index.hour], sort=True).sum()
             corr = Ds.corr().ix[tags[0] + "-reference", tags[1]]
             L.append(corr)
-            offsets.append(off)
 
         ax = fig.add_subplot(313)
-        ax.plot(offsets, L, '-')
-        ax.set_xticks(shift_interval[::4])
+        ax.plot(np.linspace(shift_interval.min(), shift_interval.max(), num=len(L)), L)
+        xticks = np.linspace(shift_interval.min(), np.abs(shift_interval).max(), num=48)
+        ax.set_xticks(xticks)
         ax.xaxis.grid(True)
+        ax.axvline(0)
         if 'H' in resample:
-            ax.set_xticklabels(map(absspec, shift_interval[::4]))
+            ax.set_xticklabels(map(absspec, xtickvalues(ax.get_xticks())), rotation=45)
         ax.set_ylabel('correlation of %s and %s' % (tags[0], tags[1]))
         ax.set_xlabel('time shift of %s (%s)' % (tags[1], shift_unit))
+        ax.set_xlim(shift_interval.min(), shift_interval.max())
         ax.legend(loc='best')
 
     def hour_of_the_week(self, tags, top_n, resolution=2, other=False):
