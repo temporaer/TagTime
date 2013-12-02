@@ -172,7 +172,7 @@ class TagTimeLog:
                     ax.fill_between(D.index, np.array(ewma[k] + ewmstd[k]).ravel(),
                                     np.array(ewma[k] - ewmstd[k]).ravel(),
                                     facecolor=colors[idx], alpha=0.2,
-                                    linewidth=1)
+                                    linewidth=0)
             ewma.plot(style='--', legend=False, ax=ax,
                       colormap=self.cmapname, linewidth=2)
         ax.legend(ax.lines[:len(D.keys())],
