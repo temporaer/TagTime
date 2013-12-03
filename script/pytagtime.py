@@ -250,64 +250,60 @@ class TagTimeLog:
         ax.set_ylabel("correlation of %s and %s" % (tags[0], tags[1]))
 
         if 'H' in resample:
+            shift_unit = '1H'; n = 24 * 2; n_min = 0.5
             if True:
-                shift_unit = '1H'; n = 24 * 1
                 shift_max = np.log(n)
-                shift_min = np.log(0.25)
+                shift_min = np.log(n_min)
                 r = np.exp(np.arange(shift_min, shift_max, np.log(1.04)))
                 shift_interval = np.concatenate(([-n], -r[::-1], [0], r, [n]))
+                y = np.linspace(-n, n, num=len(shift_interval))
                 def xtickvalues(v):
-                    from numpy import exp, log, abs, sign
-                    srange = shift_max - shift_min
-                    return sign(v) * exp(log(abs(v)) / exp(shift_max) * 24)
+                    from scipy.interpolate import interp1d
+                    return interp1d(y, shift_interval)(v)
             else:
-                shift_unit = '1H'; n = 24 * 1
                 shift_interval = np.arange(-n, n + 1, 1)
                 def xtickvalues(v):
                     return v
-
         elif resample.find('D') >= 0:
             shift_unit = '1D'
             shift_interval = np.arange(-7, 8)
-        D = self.D.resample(shift_unit, how='sum', label='left').fillna(0)
 
+        #from IPython import embed; embed()
+        from pandas.stats.math import newey_west
         correlations = []
         mutual_infos = []
         for off in shift_interval:
-            Ds = pd.DataFrame({tags[1]: self.D[tags[1]]})
+            Ds = self.D[[tags[1]]]
             Ds.index = Ds.index + pd.offsets.Minute(off * 60)
+            # TODO: why does resampling both datasets (shifted and unshifted)
+            # at the same time not work?
             Ds = Ds.resample(shift_unit, how='sum', label='left').fillna(0)
-            Ds[tags[0] + "-reference"] = D[tags[0]]
-            #Ds /= (Ds.sum(axis=1) + 0.01).max()
-            # mutual information
-            #if 'H' in resample:
-            #    Ds = Ds.groupby([Ds.index.weekday, Ds.index.hour], sort=True).sum()
-            #p_ab = (Ds[tags[0] + "-reference"] * Ds[tags[1]]).mean()
-            #p_a = Ds[tags[0] + "-reference"].mean()
-            #p_b = Ds[tags[1]].mean()
-            #mi = (p_ab * np.log(p_ab / (p_a * p_b))).sum()
-            corr = Ds.cov().ix[tags[0] + "-reference", tags[1]]
+            # Jenkins & Watts 1968;
+            # http://www.ltrr.arizona.edu/~dmeko/notes_10.pdf
+            Ds = (Ds - Ds.mean()) / Ds.std()
+            t0ref = tags[0] + "-reference"
+            Ds[t0ref] = self.D[[tags[0]]].resample(shift_unit, how='sum', label='left').fillna(0)
+            Ds = Ds.resample(shift_unit, how='sum', label='left').fillna(0)
+            # estimate covariance matrix
+            #C = newey_west(Ds, 10, Ds.sum().sum(), 2, True)
+            #corr = C[0, 1] / np.sqrt(C[0, 0] * C[1, 1])
+            corr = Ds.corr().ix[t0ref, tags[1]]
             correlations.append(corr)
-            #mutual_infos.append(mi)
 
         ax = fig.add_subplot(313)
         ax.plot(np.linspace(shift_interval.min(), shift_interval.max(),
                             num=len(correlations)), correlations, 'b', label='corr')
-        #ax2 = ax.twinx()
-        #ax2.plot(np.linspace(shift_interval.min(), shift_interval.max(),
-        #                    num=len(mutual_infos)), mutual_infos, 'r', label='MI')
-        #ax2.set_ylabel('mutual info of %s and %s' % (tags[0], tags[1]))
         xticks = np.linspace(shift_interval.min(),
                              np.abs(shift_interval).max(), num=48)
         ax.set_xticks(xticks)
         ax.xaxis.grid(True)
-        ax.axvline(0)
+        ax.axvline(0, color='k')
+        ax.axhline(0, color='k')
         if 'H' in resample:
             ax.set_xticklabels(map(absspec, xtickvalues(ax.get_xticks())), rotation=45)
         ax.set_ylabel('correlation of %s and %s' % (tags[0], tags[1]))
         ax.set_xlabel('time shift of %s (%s)' % (tags[1], shift_unit))
         ax.set_xlim(shift_interval.min(), shift_interval.max())
-        ax.legend(loc='best')
 
     def hour_of_the_week(self, tags, top_n, resolution=2, other=False):
         """ show the supplied tags summed up per hour """
