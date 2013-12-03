@@ -31,7 +31,7 @@ def reldate(s):
     return datetime.datetime(d.year, d.month, d.day)
 
 def absspec(v):
-    if v > -1 and v < 1:
+    if v > -1.5 and v < 1.5:
         return "%d'" % int(v * 60)
     if v > -24 and v < 24:
         return "%1.1fh" % v
@@ -251,14 +251,15 @@ class TagTimeLog:
 
         if 'H' in resample:
             if True:
-                base = 2
                 shift_unit = '1H'; n = 24 * 1
-                shift_max = np.log(n) / np.log(base)
-                r = base ** np.arange(0, shift_max, np.log(1.03) / np.log(base))
+                shift_max = np.log(n)
+                shift_min = np.log(0.25)
+                r = np.exp(np.arange(shift_min, shift_max, np.log(1.04)))
                 shift_interval = np.concatenate(([-n], -r[::-1], [0], r, [n]))
                 def xtickvalues(v):
-                    return np.sign(v) * base **  \
-                            (np.abs(v) * shift_max / base ** shift_max)
+                    from numpy import exp, log, abs, sign
+                    srange = shift_max - shift_min
+                    return sign(v) * exp(log(abs(v)) / exp(shift_max) * 24)
             else:
                 shift_unit = '1H'; n = 24 * 1
                 shift_interval = np.arange(-n, n + 1, 1)
@@ -270,20 +271,34 @@ class TagTimeLog:
             shift_interval = np.arange(-7, 8)
         D = self.D.resample(shift_unit, how='sum', label='left').fillna(0)
 
-        L = []
+        correlations = []
+        mutual_infos = []
         for off in shift_interval:
             Ds = pd.DataFrame({tags[1]: self.D[tags[1]]})
             Ds.index = Ds.index + pd.offsets.Minute(off * 60)
             Ds = Ds.resample(shift_unit, how='sum', label='left').fillna(0)
             Ds[tags[0] + "-reference"] = D[tags[0]]
+            #Ds /= (Ds.sum(axis=1) + 0.01).max()
+            # mutual information
             #if 'H' in resample:
-                #Ds = Ds.groupby([Ds.index.weekday, Ds.index.hour], sort=True).sum()
-            corr = Ds.corr().ix[tags[0] + "-reference", tags[1]]
-            L.append(corr)
+            #    Ds = Ds.groupby([Ds.index.weekday, Ds.index.hour], sort=True).sum()
+            #p_ab = (Ds[tags[0] + "-reference"] * Ds[tags[1]]).mean()
+            #p_a = Ds[tags[0] + "-reference"].mean()
+            #p_b = Ds[tags[1]].mean()
+            #mi = (p_ab * np.log(p_ab / (p_a * p_b))).sum()
+            corr = Ds.cov().ix[tags[0] + "-reference", tags[1]]
+            correlations.append(corr)
+            #mutual_infos.append(mi)
 
         ax = fig.add_subplot(313)
-        ax.plot(np.linspace(shift_interval.min(), shift_interval.max(), num=len(L)), L)
-        xticks = np.linspace(shift_interval.min(), np.abs(shift_interval).max(), num=48)
+        ax.plot(np.linspace(shift_interval.min(), shift_interval.max(),
+                            num=len(correlations)), correlations, 'b', label='corr')
+        #ax2 = ax.twinx()
+        #ax2.plot(np.linspace(shift_interval.min(), shift_interval.max(),
+        #                    num=len(mutual_infos)), mutual_infos, 'r', label='MI')
+        #ax2.set_ylabel('mutual info of %s and %s' % (tags[0], tags[1]))
+        xticks = np.linspace(shift_interval.min(),
+                             np.abs(shift_interval).max(), num=48)
         ax.set_xticks(xticks)
         ax.xaxis.grid(True)
         ax.axvline(0)
