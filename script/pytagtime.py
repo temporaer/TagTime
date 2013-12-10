@@ -203,6 +203,7 @@ class TagTimeLog:
         if 'other' in tags:
             D['other'] = self.D[[t for t in self.D.keys()
                                  if t not in tags]].sum(axis=1)
+        self.D_ = D
         Dresampled = D.resample(resample, how='sum', label='left')
 
         D = Dresampled.fillna(0)
@@ -222,8 +223,8 @@ class TagTimeLog:
         self._obfuscate(D)
 
         alpha = 1
-        fig = plt.figure(figsize=(18, 14))
-        ax = fig.add_subplot(311)
+        fig = plt.figure(figsize=(22, 14))
+        ax = fig.add_subplot(411)
 
         if ewmaspan is not None:
             colors = self.cmap(np.linspace(0., 1., len(D.keys())))
@@ -244,10 +245,23 @@ class TagTimeLog:
 
         D = Dresampled.resample('1D', how='sum', label='left').fillna(0)
 
-        ax = fig.add_subplot(312)
+        ax = fig.add_subplot(412)
         Dc = pd.rolling_corr_pairwise(D, len(D.index)/10.)
-        Dc.ix[:, tags[0], tags[1]].plot(ax=ax)
+        Dc.dropna().ix[:, tags[0], tags[1]].plot(ax=ax)
         ax.set_ylabel("correlation of %s and %s" % (tags[0], tags[1]))
+
+        ax = fig.add_subplot(413)
+        resolution = 1
+        D = self.D_.groupby(resolution * (self.D_.index.hour / resolution),
+                      sort=True).sum()
+        V = D.sum(axis=1)
+        for k in D.keys():
+            D[k] = D[k] / self.day_normalizer
+        D = D.fillna(0)
+        D["%s/%s" % (tags[0], tags[1])] = D[tags[0]] / (D[tags[1]] + 0.001)
+        D["%s/%s" % (tags[0], tags[1])].plot(colormap=self.cmapname, ax=ax, linewidth=2)
+        ax.set_ylabel("ratio of %s and %s" % (tags[0], tags[1]))
+        ax.set_xlabel("hour of the day")
 
         if 'H' in resample:
             shift_unit = '1H'; n = 24 * 2; n_min = 0.5
@@ -290,7 +304,7 @@ class TagTimeLog:
             corr = Ds.corr().ix[t0ref, tags[1]]
             correlations.append(corr)
 
-        ax = fig.add_subplot(313)
+        ax = fig.add_subplot(414)
         ax.plot(np.linspace(shift_interval.min(), shift_interval.max(),
                             num=len(correlations)), correlations, 'b', label='corr')
         xticks = np.linspace(shift_interval.min(),
