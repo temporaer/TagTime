@@ -47,7 +47,7 @@ class TagTimeLog:
                  multitag='first', cmap="Paired", skipweekdays=[],
                  skiptags=[], includehours=(0,24),
                  obfuscate=False, show_now=True, smooth=True,
-                 sigma=1.0, maptags=None):
+                 sigma=1.0, maptags=None, dropdays=[]):
         self.skipweekdays = skipweekdays
         self.skiptags = skiptags
         self.interval = interval
@@ -60,6 +60,7 @@ class TagTimeLog:
         self.smooth = smooth
         self.sigma = sigma
         self.maptags = maptags
+        self.dropdays = dropdays
         if isinstance(filename, str):
             with open(filename, "r") as log:
                 self._parse_file(log)
@@ -112,6 +113,8 @@ class TagTimeLog:
             line = re.sub(r'\s*\[.*?\]\s*$', '', line)
             fields = re.split(r'\s+', line)
             dt = datetime.datetime.fromtimestamp(int(fields[0]))
+            if dt.date() in self.dropdays:
+                continue
             tags = fields[1:]
 
             tags = [x for x in tags if x not in self.skiptags]
@@ -161,13 +164,15 @@ class TagTimeLog:
         self._obfuscate(D)
         D = D.fillna(0)
         if ewmaspan is not None:
-            ewma = pd.ewma(D, span=ewmaspan)
-            ewmstd = pd.ewmstd(D, span=2 * ewmaspan)
+            min_periods = int(self.day_normalizer / 10)
+            print "min_periods=", min_periods
+            ewma = pd.ewma(D, span=ewmaspan, min_periods=min_periods).dropna()
+            ewmstd = pd.ewmstd(D, span=2 * ewmaspan, min_periods=min_periods).dropna()
             if cumulative:
-                ewmstd = ewmstd * 3
+                ewmstd = ewmstd * 2
                 ewma = ewma.cumsum()
         if cumulative:
-            D = D.cumsum()
+            D = D[min_periods:].cumsum()
 
         alpha = 0.5 if not cumulative and ewmaspan is not None else 1
         ax = D.plot(linewidth=2, colormap=self.cmapname,
@@ -176,7 +181,7 @@ class TagTimeLog:
             colors = self.cmap(np.linspace(0., 1., len(D.keys())))
             if cumulative:
                 for idx, k in enumerate(tags):
-                    ax.fill_between(D.index, np.array(ewma[k] + ewmstd[k]).ravel(),
+                    ax.fill_between(ewma.index, np.array(ewma[k] + ewmstd[k]).ravel(),
                                     np.array(ewma[k] - ewmstd[k]).ravel(),
                                     facecolor=colors[idx], alpha=0.2,
                                     linewidth=0)
@@ -209,16 +214,17 @@ class TagTimeLog:
         D = Dresampled.fillna(0)
         ratio_name = '%s/%s' % (tags[0], tags[1])
         if ewmaspan is not None:
-            ewma = pd.ewma(D, span=ewmaspan)
+            min_periods = int(self.day_normalizer / 10)
+            ewma = pd.ewma(D, span=ewmaspan, min_periods=min_periods)
             ratio = ewma[tags[0]] / ewma[tags[1]]
             ratio = ratio.replace([np.inf, -np.inf], np.nan)
             ewma[ratio_name] = ratio
             D[ratio_name] = ratio
             ewma = ewma.fillna(0)
             #ewma = ewma.cumsum()
-            print ewma[ratio_name]
+            #print ewma[ratio_name]
 
-            ewmstd = pd.ewmstd(D, span=2 * ewmaspan)
+            ewmstd = pd.ewmstd(D, span=2 * ewmaspan, min_periods=min_periods)
 
         self._obfuscate(D)
 
@@ -231,7 +237,7 @@ class TagTimeLog:
             ewma[ratio_name].plot(style='--', legend=False, ax=ax,
                       colormap=self.cmapname, linewidth=2)
             for idx, k in enumerate([ratio_name]):
-                ax.fill_between(D.index, np.array(ewma[k] + ewmstd[k]).ravel(),
+                ax.fill_between(ewma.index, np.array(ewma[k] + ewmstd[k]).ravel(),
                                 np.array(ewma[k] - ewmstd[k]).ravel(),
                                 facecolor=colors[idx], alpha=0.2,
                                 linewidth=0)
@@ -251,15 +257,26 @@ class TagTimeLog:
         ax.set_ylabel("correlation of %s and %s" % (tags[0], tags[1]))
 
         ax = fig.add_subplot(413)
-        resolution = 1
-        D = self.D_.groupby(resolution * (self.D_.index.hour / resolution),
-                      sort=True).sum()
-        V = D.sum(axis=1)
-        for k in D.keys():
-            D[k] = D[k] / self.day_normalizer
-        D = D.fillna(0)
-        D["%s/%s" % (tags[0], tags[1])] = D[tags[0]] / (D[tags[1]] + 0.001)
-        D["%s/%s" % (tags[0], tags[1])].plot(colormap=self.cmapname, ax=ax, linewidth=2)
+        D = self.D_.fillna(0).groupby([self.D_.index.hour, 15 * (self.D_.index.minute / 15)],
+                      sort=True, as_index=True)
+
+        # determine the fraction of time spent on this task
+        hour_sums = D.mean()
+        hour_std = D.std()
+        D = hour_sums
+
+        hour_sums = hour_sums.fillna(0)
+        hour_std = hour_std.fillna(0)
+        #from IPython.core.debugger import Tracer; Tracer()()
+        ratio_name = "%s/%s" % (tags[0], tags[1])
+        D[ratio_name] = hour_sums[tags[0]] / (hour_sums[tags[1]] + 0.001)
+        D[ratio_name][D[ratio_name] > 10] = np.nan
+        r = D[ratio_name].plot(colormap=self.cmapname, ax=ax, linewidth=2)
+        #from IPython.core.debugger import Tracer; Tracer()()
+        D['__pm'] = (hour_std[tags[0]] + hour_std[tags[1]]) / 2.
+        ax.fill_between(np.arange(len(D[ratio_name])), np.array(D[ratio_name] + D['__pm']).ravel(),
+                np.array(D[ratio_name] - D['__pm']).ravel(), alpha=0.2,
+                linewidth=0)
         ax.set_ylabel("ratio of %s and %s" % (tags[0], tags[1]))
         ax.set_xlabel("hour of the day")
 
@@ -329,13 +346,9 @@ class TagTimeLog:
         if other:
             D['other'] = self.D[[t for t in self.D.keys()
                                  if t not in tags]].sum(axis=1)
-        D = D.groupby([D.index.weekday,
+        D = D.fillna(0).groupby([D.index.weekday,
                        resolution * (D.index.hour / resolution)],
-                      sort=True).sum()
-        V = D.sum(axis=1)
-        for k in D.keys():
-            D[k] = D[k] * 60 / V
-        D = D.fillna(0)
+                      sort=True).mean() * (60 / self.interval)
         self._obfuscate(D)
         ax = D.plot(kind='bar', stacked=True, colormap=self.cmapname)
         ax.legend(loc='best')
@@ -364,11 +377,8 @@ class TagTimeLog:
         D = self.D[tags] if tags is not None else self.D
         if other:
             D['other'] = self.D[[t for t in self.D.keys() if t not in tags]].sum(axis=1)
-        D = D.groupby(resolution * (D.index.hour / resolution),
-                      sort=True).sum()
-        V = D.sum(axis=1)
-        for k in D.keys():
-            D[k] = D[k] * 60 / V
+        D = D.fillna(0).groupby(resolution * (D.index.hour / resolution),
+                      sort=True).mean()
         self._obfuscate(D)
         now = datetime.datetime.now().hour + datetime.datetime.now().minute / 60.
         if self.multitag == 'double':
@@ -411,13 +421,8 @@ class TagTimeLog:
         if other:
             D['other'] = self.D[[t for t in self.D.keys()
                                  if t not in tags]].sum(axis=1)
-        D = D.resample('D', how='sum', label='left').fillna(0)  # sum up within days
-        D = D / D.sum(axis=1)  # all records within a day must sum to 1
-        D = D.groupby(D.index.weekday, sort=True).mean()  # take average over weeks
-        V = D.sum(axis=1)
-        n_hours = self.includehours[1] - self.includehours[0]
-        for k in D.keys():
-            D[k] = D[k] * n_hours / V
+        D = D.fillna(0).resample('D', how='sum', label='left')  # sum up within days
+        D = D.groupby(D.index.weekday, sort=True).sum()  / self.day_normalizer  # take average over weeks
         self._obfuscate(D)
         if self.multitag == 'double':
             if len(D.keys()) < 8:
@@ -516,6 +521,18 @@ def maptags(s):
             ret[s] = dst
     return ret
 
+def daylistfile(filename):
+    L = []
+    with open(filename, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if len(line) == 0:
+                continue
+            if line[0] == '#':
+                continue
+            L.append(datetime.datetime.strptime(line, "%Y-%m-%d").date())
+    return L
+
 def main():
     import argparse
 
@@ -549,6 +566,7 @@ def main():
     parser.add_argument('--include-hours', default=(0, 24), type=lambda x: map(int, x.split("-")), help='which hours to use, e.g. 8-18 (inclusive, exclusive)')
     parser.add_argument('--rstart', type=reldate, help='relative start date of interval, inclusive (2D: 2 days ago, 2W: 2 Weeks ago)')
     parser.add_argument('--rend',   type=reldate, help='relative end date of interval, exclusive')
+    parser.add_argument('--exclude-days', type=daylistfile, default=[], help='supply a file with dates that are to be excluded')
     parser.add_argument('--start', type=lambda x: datetime.datetime.strptime(x, '%Y-%m-%d'), help='start date of interval, inclusive (YYYY-MM-DD)')
     parser.add_argument('--end',   type=lambda x: datetime.datetime.strptime(x, '%Y-%m-%d'), help='end date of interval, exclusive (YYYY-MM-DD)')
     parser.add_argument('--cmap',   default='Paired', help='color map for graphs, see http://wiki.scipy.org/Cookbook/Matplotlib/Show_colormaps')
@@ -581,7 +599,8 @@ def main():
                      show_now=args.no_now,
                      smooth=args.no_smooth,
                      sigma=args.smooth_sigma,
-                     maptags=args.map_tags)
+                     maptags=args.map_tags,
+                     dropdays=args.exclude_days)
     if(args.pie):
         ttl.pie(args.tags, args.top_n, args.other)
     if(args.day_of_the_week):
