@@ -109,15 +109,20 @@ class TagTimeLog:
         weights /= weights.sum()
         print weights
 
-        for line in handle:
-            line = re.sub(r'\s*\[.*?\]\s*$', '', line)
-            fields = re.split(r'\s+', line)
+        for line0 in handle:
+            line1 = re.sub(r'\s*\[.*?\]', '', line0)
+            line2 = re.sub(r'\s*\+', '', line1)
+            line3 = line2.strip()
+            print "`%s'" % line3
+            fields = re.split(r'\s+', line3)
             dt = datetime.datetime.fromtimestamp(int(fields[0]))
             if dt.date() in self.dropdays:
                 continue
             tags = fields[1:]
+            #print "`%s' (%s)" % (",".join(tags), line1)
 
             tags = [x for x in tags if x not in self.skiptags]
+            tags = np.unique(tags)
 
             if self.maptags:
                 tags2 = []
@@ -148,6 +153,9 @@ class TagTimeLog:
         print "Excluded %d entries" % n_excluded
 
         for f in D.keys():
+            if len(D[f]) <= 1:
+                del D[f]
+                continue
             D[f] = pd.Series(V[f], index=D[f])
 
         self.D = pd.DataFrame(D)
