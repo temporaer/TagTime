@@ -139,7 +139,7 @@ class TagTimeLog:
             for t in tags:
                 duration = interval
                 if self.multitag == 'split':
-                    duration /= len(tags)
+                    duration = duration / len(tags)
 
                 for weight, offset in zip(weights, offsetlist):
                     dtx = dt + datetime.timedelta(hours=offset * interval)
@@ -171,8 +171,8 @@ class TagTimeLog:
         D = D.resample(resample, how='sum', label='left')
         self._obfuscate(D)
         D = D.fillna(0)
+        min_periods = int(self.day_normalizer / 10)
         if ewmaspan is not None:
-            min_periods = int(self.day_normalizer / 10)
             print "min_periods=", min_periods
             ewma = pd.ewma(D, span=ewmaspan, min_periods=min_periods).dropna()
             ewmstd = pd.ewmstd(D, span=2 * ewmaspan, min_periods=min_periods).dropna()
@@ -386,7 +386,7 @@ class TagTimeLog:
         if other:
             D['other'] = self.D[[t for t in self.D.keys() if t not in tags]].sum(axis=1)
         D = D.fillna(0).groupby(resolution * (D.index.hour / resolution),
-                      sort=True).mean()
+                      sort=True).mean() * 60. / self.interval
         self._obfuscate(D)
         now = datetime.datetime.now().hour + datetime.datetime.now().minute / 60.
         if self.multitag == 'double':
@@ -456,7 +456,7 @@ class TagTimeLog:
             plt.xticks(np.arange(7), list("MTWTFSS"))
         else:
             D.plot(kind='bar', stacked=True, colormap=self.cmapname)
-            plt.ylim(0, n_hours)
+            #plt.ylim(0, n_hours)
             plt.xticks(np.arange(7) + 0.5, list("MTWTFSS"))
         plt.suptitle(self.rng)
         plt.legend(loc='best')
