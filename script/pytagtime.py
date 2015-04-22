@@ -479,6 +479,41 @@ class TagTimeLog:
             keys.append(x)
         return keys
 
+    def scatter(self, tags, top_n=None, other=False):
+        """
+        Show a scatter-plot of how time is spent.
+        """
+
+        if top_n is not None:
+            tags = self.top_n_tags(top_n, tags)
+        D = self.D[tags] if tags is not None else self.D
+        if other:
+            D['other'] = self.D[[t for t in self.D.keys()
+                                 if t not in tags]].sum(axis=1)
+
+        # sum up tags within a day, determine the mean over the days
+        self._obfuscate(D)
+        D2 = D.sum()
+
+        # sort by time spent
+        keys = sorted(D2.keys(), key=lambda x: D2[x], reverse=True)
+
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+        
+        #from IPython import embed; embed()
+        colors = self.cmap(np.linspace(0., 1., len(keys)))
+        xmin, xmax = [], []
+        for c, key in zip(colors, keys):
+            X = D[key].dropna().index
+            Y = np.arange(len(X))
+            ax.scatter(X, Y, color=c, label=key)
+            xmin.append(min(X))
+            xmax.append(max(X))
+        ax.set_xlim(min(xmin), max(xmax))
+
+        plt.legend(loc='upper left')
+
     def pie(self, tags, top_n=None, other=False):
         """
         Show a pie-chart of how time is spent.
@@ -548,6 +583,7 @@ def main():
     parser.add_argument('logfile', type=argparse.FileType('r'), help='the logfile to analyze')
     parser.add_argument('--pie', action='store_true', help='display a pie chart for total time spent')
     parser.add_argument('--day-of-the-week', action='store_true', help='display a bar for each day of the week')
+    parser.add_argument('--scatter', action='store_true', help='display scatter plot of pings')
     parser.add_argument('--trends', action='store_true', help='show a line chart of time spent in trend-interval')
     parser.add_argument('--ratio-trends', action='store_true', help='show a line chart of time spent in trend-interval as smoothed ratio of two tags')
     parser.add_argument('--cumulative-trends', action='store_true', help='show beeminder-like representation')
@@ -609,6 +645,8 @@ def main():
                      sigma=args.smooth_sigma,
                      maptags=args.map_tags,
                      dropdays=args.exclude_days)
+    if(args.scatter):
+        ttl.scatter(args.tags, args.top_n, args.other)
     if(args.pie):
         ttl.pie(args.tags, args.top_n, args.other)
     if(args.day_of_the_week):
